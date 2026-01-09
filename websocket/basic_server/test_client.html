@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 测试客户端</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        input {
+            padding: 8px;
+            margin: 5px;
+            width: 200px;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: #f9f9f9;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #007bff;
+        }
+        .error {
+            border-left-color: #dc3545;
+            color: #dc3545;
+        }
+        .success {
+            border-left-color: #28a745;
+            color: #28a745;
+        }
+        .status {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 3px;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket 测试客户端</h1>
+    
+    <div class="container">
+        <h2>连接状态</h2>
+        <div id="status" class="status disconnected">未连接</div>
+        <div>
+            <button id="connectBtn" onclick="connect()">连接</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>断开</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>订阅管理</h2>
+        <input type="text" id="channelInput" placeholder="频道名称 (如: lottery:created)" value="lottery:created">
+        <button onclick="subscribe()">订阅</button>
+        <button onclick="unsubscribe()">取消订阅</button>
+    </div>
+
+    <div class="container">
+        <h2>消息</h2>
+        <button onclick="sendPing()">发送心跳 (Ping)</button>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let clientId = null;
+
+        function addMessage(text, type = 'info') {
+            const messages = document.getElementById('messages');
+            const message = document.createElement('div');
+            message.className = `message ${type}`;
+            message.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+            messages.appendChild(message);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+
+            if (connected) {
+                status.className = 'status connected';
+                status.textContent = `已连接 (ClientID: ${clientId || 'N/A'})`;
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            } else {
+                status.className = 'status disconnected';
+                status.textContent = '未连接';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+        }
+
+        function connect() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                addMessage('已经连接', 'error');
+                return;
+            }
+
+            ws = new WebSocket('ws://localhost:8080/ws');
+
+            ws.onopen = () => {
+                addMessage('✅ WebSocket 连接已建立', 'success');
+                updateStatus(true);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    console.log('收到消息:', msg);
+
+                    if (msg.action === 'connect') {
+                        clientId = msg.clientId;
+                        addMessage(`✅ 连接确认: ClientID = ${msg.clientId}`, 'success');
+                        updateStatus(true);
+                    } else if (msg.action === 'subscribe') {
+                        addMessage(`✅ 订阅确认: 频道 ${msg.channel}`, 'success');
+                    } else if (msg.action === 'unsubscribe') {
+                        addMessage(`✅ 取消订阅确认: 频道 ${msg.channel}`, 'success');
+                    } else if (msg.action === 'pong') {
+                        addMessage('💓 收到 Pong 响应', 'success');
+                    } else if (msg.action === 'message') {
+                        addMessage(`📨 收到频道消息 [${msg.channel}]: ${JSON.stringify(msg.data)}`, 'success');
+                    } else {
+                        addMessage(`📨 收到消息: ${JSON.stringify(msg)}`, 'info');
+                    }
+                } catch (e) {
+                    addMessage(`❌ 消息解析失败: ${event.data}`, 'error');
+                }
+            };
+
+            ws.onerror = (error) => {
+                addMessage(`❌ WebSocket 错误: ${error}`, 'error');
+            };
+
+            ws.onclose = () => {
+                addMessage('⚠️ WebSocket 连接已关闭', 'error');
+                updateStatus(false);
+                clientId = null;
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function subscribe() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('❌ 请先连接 WebSocket', 'error');
+                return;
+            }
+
+            const channel = document.getElementById('channelInput').value.trim();
+            if (!channel) {
+                addMessage('❌ 请输入频道名称', 'error');
+                return;
+            }
+
+            const msg = {
+                action: 'subscribe',
+                channel: channel
+            };
+            ws.send(JSON.stringify(msg));
+            addMessage(`📤 发送订阅请求: ${channel}`, 'info');
+        }
+
+        function unsubscribe() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('❌ 请先连接 WebSocket', 'error');
+                return;
+            }
+
+            const channel = document.getElementById('channelInput').value.trim();
+            if (!channel) {
+                addMessage('❌ 请输入频道名称', 'error');
+                return;
+            }
+
+            const msg = {
+                action: 'unsubscribe',
+                channel: channel
+            };
+            ws.send(JSON.stringify(msg));
+            addMessage(`📤 发送取消订阅请求: ${channel}`, 'info');
+        }
+
+        function sendPing() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                addMessage('❌ 请先连接 WebSocket', 'error');
+                return;
+            }
+
+            const msg = {
+                action: 'ping'
+            };
+            ws.send(JSON.stringify(msg));
+            addMessage('📤 发送心跳 (Ping)', 'info');
+        }
+
+        // 页面加载时显示提示
+        addMessage('点击"连接"按钮开始测试', 'info');
+    </script>
+</body>
+</html>
+
